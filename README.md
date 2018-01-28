@@ -1,5 +1,7 @@
 # Azure Container Registry autologin (AAD refresh tokens)
 
+[![Docker Automated build](https://img.shields.io/docker/automated/mblaschke/azure-acr-docker-autologin.svg)](https://hub.docker.com/r/mblaschke/azure-acr-docker-autologin/)
+
 This daemon uses an service principal to create a `~/.docker/config.json`
 with refresh tokens for all Azure Container Registries which are
 available for this service prinicpal. These refresh tokens are normally
