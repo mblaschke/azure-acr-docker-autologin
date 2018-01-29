@@ -12,6 +12,7 @@ import (
 	"github.com/Azure/go-autorest/autorest/adal"
 	azureapi "github.com/Azure/go-autorest/autorest/azure"
 	"github.com/Azure/azure-sdk-for-go/arm/containerregistry"
+	"github.com/pkg/errors"
 )
 
 const (
@@ -21,6 +22,11 @@ const (
 var opts struct {
 	DockerConfigPath    string   `           long:"docker-config"`
 	Daemon              bool     `short:"d"  long:"daemon"`
+	AzureTenant         string   `           long:"azure-tenant"`
+	AzureSubscription   string   `           long:"azure-subscription"`
+	AzureClient         string   `           long:"azure-client"`
+	azureClientSecret   string
+	k8sEnabled          bool
 	K8sNamespace        string   `           long:"k8s-secret-namespace"`
 	K8sSecret           string   `           long:"k8s-secret-name"`
 	K8sFilename         string   `           long:"k8s-secret-filename"`
@@ -33,11 +39,6 @@ var (
 	argparser *flags.Parser
 	args []string
 	k8sService = Kubernetes{}
-
-	azureTenant = os.Getenv("AZURE_TENANT")
-	azureSubscription = os.Getenv("AZURE_SUBSCRIPTION")
-	azureClient = os.Getenv("AZURE_CLIENT")
-	azureClientSecret = os.Getenv("AZURE_CLIENT_SECRET")
 )
 
 type DockerConfigEntry struct {
@@ -47,6 +48,97 @@ type DockerConfigEntry struct {
 
 type DockerConfig struct {
 	Auths map[string]DockerConfigEntry `json:"auths"`
+}
+
+func initOpts() (err error) {
+	//#######################
+	// Daemon
+	//#######################
+	if opts.AutoRefresh != "" {
+		if val, err := time.ParseDuration(opts.AutoRefresh); err == nil {
+			opts.autoRefresh = val
+		} else {
+			FatalErrorMessage("unable to parse --refresh", err)
+		}
+	}
+
+	//#######################
+	// Azure
+	//#######################
+	if val := os.Getenv("AZURE_TENANT"); opts.AzureTenant == "" && val != "" {
+		opts.AzureTenant = val
+	}
+
+	if val := os.Getenv("AZURE_SUBSCRIPTION"); opts.AzureSubscription == "" && val != "" {
+		opts.AzureSubscription = val
+	}
+
+	if val := os.Getenv("AZURE_CLIENT"); opts.AzureClient == "" && val != "" {
+		opts.AzureClient = val
+	}
+
+	if val := os.Getenv("AZURE_CLIENT_SECRET"); opts.azureClientSecret == "" && val != "" {
+		opts.azureClientSecret = val
+	}
+
+	//#######################
+	// K8S
+	//#######################
+	if val := os.Getenv("KUBERNETES_SECRET_NAMESPACE"); opts.K8sNamespace == "" && val != "" {
+		opts.K8sNamespace = val
+	}
+
+	if val := os.Getenv("KUBERNETES_SECRET_NAME"); opts.K8sSecret == "" && val != "" {
+		opts.K8sSecret = val
+	}
+
+	if val := os.Getenv("KUBERNETES_SECRET_FILENAME"); opts.K8sFilename == "" && val != "" {
+		opts.K8sFilename = val
+	}
+
+	return
+}
+
+func validateOpts() (err error) {
+
+	//#######################
+	// Azure
+	//#######################
+	if opts.AzureTenant == "" {
+		return errors.New("Azure tenant id empty (use either --azure-tenant or env var AZURE_TENANT)")
+	}
+
+	if opts.AzureSubscription == "" {
+		return errors.New("Azure subscription id empty (use either --azure-subscription or env var AZURE_SUBSCRIPTION)")
+	}
+
+	if opts.AzureClient == "" {
+		return errors.New("Azure client id empty (use either --azure-client or env var AZURE_CLIENT)")
+	}
+
+	if opts.azureClientSecret == "" {
+		return errors.New("Azure client secret empty (use env var AZURE_CLIENT_SECRET)")
+	}
+
+	//#######################
+	// K8S
+	//#######################
+	if opts.K8sNamespace != "" && opts.K8sSecret != "" && opts.K8sFilename != "" {
+		opts.k8sEnabled = true
+		if opts.K8sNamespace == "" {
+			return errors.New("K8S secret namespace empty (use either --k8s-secret-namespace or env var KUBERNETES_SECRET_NAMESPACE)")
+		}
+
+		if opts.K8sSecret == "" {
+			return errors.New("K8S secret name empty (use either --k8s-secret-name or env var KUBERNETES_SECRET_NAME)")
+		}
+
+		if opts.K8sSecret == "" {
+			return errors.New("K8S secret name empty (use either --k8s-secret-filename or env var KUBERNETES_SECRET_FILENAME)")
+		}
+	}
+
+	return
 }
 
 func main() {
@@ -65,24 +157,12 @@ func main() {
 		}
 	}
 
-	if val := os.Getenv("KUBERNETES_SECRET_NAMESPACE"); val != "" {
-		opts.K8sNamespace = val
+	if err := initOpts(); err != nil {
+		FatalErrorMessage("unable to process arguments/env vars", err)
 	}
 
-	if val := os.Getenv("KUBERNETES_SECRET_NAME"); val != "" {
-		opts.K8sSecret = val
-	}
-
-	if val := os.Getenv("KUBERNETES_SECRET_FILENAME"); val != "" {
-		opts.K8sFilename = val
-	}
-
-	if opts.AutoRefresh != "" {
-		if val, err := time.ParseDuration(opts.AutoRefresh); err == nil {
-			opts.autoRefresh = val
-		} else {
-			FatalErrorMessage("unable to parse --refresh", err)
-		}
+	if err := validateOpts(); err != nil {
+		FatalErrorMessage("unable to validate config", err)
 	}
 
 	if opts.Daemon {
@@ -102,15 +182,15 @@ func main() {
 }
 
 func updateDockerConfig() {
-	oauthConfig, err := adal.NewOAuthConfig(azureapi.PublicCloud.ActiveDirectoryEndpoint, azureTenant)
+	oauthConfig, err := adal.NewOAuthConfig(azureapi.PublicCloud.ActiveDirectoryEndpoint, opts.AzureTenant)
 	if err != nil {
 		FatalErrorMessage("failed to get oauth config", err)
 	}
 
 	servicePrincipalToken, err := adal.NewServicePrincipalToken(
 		*oauthConfig,
-		azureClient,
-		azureClientSecret,
+		opts.AzureClient,
+		opts.azureClientSecret,
 		azureapi.PublicCloud.ResourceManagerEndpoint,
 	)
 	if err != nil {
@@ -120,7 +200,7 @@ func updateDockerConfig() {
 	servicePrincipalToken.SetRefreshWithin(time.Duration(1)*time.Hour)
 	servicePrincipalToken.Refresh()
 
-	registryClient := containerregistry.NewRegistriesClient(azureSubscription)
+	registryClient := containerregistry.NewRegistriesClient(opts.AzureSubscription)
 	registryClient.BaseURI = azureapi.PublicCloud.ResourceManagerEndpoint
 	registryClient.Authorizer = autorest.NewBearerAuthorizer(servicePrincipalToken)
 
@@ -134,7 +214,7 @@ func updateDockerConfig() {
 
 				fmt.Println(fmt.Sprintf("Request RefreshToken for %s", acrServer))
 
-				acrToken, err := fetchAcrToken(acrServer, azureTenant, servicePrincipalToken.AccessToken)
+				acrToken, err := fetchAcrToken(acrServer, opts.AzureTenant, servicePrincipalToken.AccessToken)
 				if err != nil {
 					ErrorMessage("failed to fetch acr refresh token", err)
 					continue
@@ -172,7 +252,7 @@ func updateDockerConfig() {
 		}
 
 		// Update k8s secret
-		if opts.K8sNamespace != "" && opts.K8sSecret != "" && opts.K8sFilename != "" {
+		if opts.k8sEnabled {
 			fmt.Println(fmt.Sprintf("Updating k8s secret %s:%s", opts.K8sNamespace, opts.K8sSecret))
 			if err := k8sService.ApplySecret(opts.K8sNamespace, opts.K8sSecret, opts.K8sFilename, jsonData); err != nil {
 				ErrorMessage("Unable to update k8 ssecret", err)
