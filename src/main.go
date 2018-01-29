@@ -3,16 +3,16 @@ package main
 import (
 	"os"
 	"fmt"
-	"encoding/json"
 	"time"
+	"errors"
 	"io/ioutil"
+	"encoding/json"
 	"encoding/base64"
 	flags "github.com/jessevdk/go-flags"
 	"github.com/Azure/go-autorest/autorest"
 	"github.com/Azure/go-autorest/autorest/adal"
 	azureapi "github.com/Azure/go-autorest/autorest/azure"
 	"github.com/Azure/azure-sdk-for-go/arm/containerregistry"
-	"github.com/pkg/errors"
 )
 
 const (
