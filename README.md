@@ -8,6 +8,9 @@ available for this service prinicpal. These refresh tokens are normally
 only valid for 1 hour so this daemon will refresh the file before the
 timeout.
 
+For Kubernetes there is already an integration but that only works from
+the same subscription. If you want to have multiple clusters in different
+subscription maybe this solution will fix this issue (until Azure fixes this).
 
 ## Standalone
 
