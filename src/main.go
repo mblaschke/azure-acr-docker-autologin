@@ -9,10 +9,6 @@ import (
 	"encoding/json"
 	"encoding/base64"
 	flags "github.com/jessevdk/go-flags"
-	"github.com/Azure/go-autorest/autorest"
-	"github.com/Azure/go-autorest/autorest/adal"
-	azureapi "github.com/Azure/go-autorest/autorest/azure"
-	"github.com/Azure/azure-sdk-for-go/arm/containerregistry"
 )
 
 const (
@@ -40,15 +36,6 @@ var (
 	args []string
 	k8sService = Kubernetes{}
 )
-
-type DockerConfigEntry struct {
-	Auth string          `json:"auth"`
-	Identitytoken string `json:"identitytoken"`
-}
-
-type DockerConfig struct {
-	Auths map[string]DockerConfigEntry `json:"auths"`
-}
 
 func initOpts() (err error) {
 	//#######################
@@ -182,39 +169,28 @@ func main() {
 }
 
 func updateDockerConfig() {
-	oauthConfig, err := adal.NewOAuthConfig(azureapi.PublicCloud.ActiveDirectoryEndpoint, opts.AzureTenant)
-	if err != nil {
-		FatalErrorMessage("failed to get oauth config", err)
+	// create azure service principal adal token
+	azureService := AzureService{
+		TenantId: opts.AzureTenant,
+		ClientId: opts.AzureClient,
+		ClientSecret: opts.azureClientSecret,
 	}
-
-	servicePrincipalToken, err := adal.NewServicePrincipalToken(
-		*oauthConfig,
-		opts.AzureClient,
-		opts.azureClientSecret,
-		azureapi.PublicCloud.ResourceManagerEndpoint,
-	)
+	_, err := azureService.CreateServicePrincipalToken()
 	if err != nil {
 		FatalErrorMessage("failed to create service principal token", err)
 	}
 
-	servicePrincipalToken.SetRefreshWithin(time.Duration(1)*time.Hour)
-	servicePrincipalToken.Refresh()
+	// init docker configuration
+	dockerConfig := CreateDockerConfig()
 
-	registryClient := containerregistry.NewRegistriesClient(opts.AzureSubscription)
-	registryClient.BaseURI = azureapi.PublicCloud.ResourceManagerEndpoint
-	registryClient.Authorizer = autorest.NewBearerAuthorizer(servicePrincipalToken)
-
-	dockerConfig := DockerConfig{}
-	dockerConfig.Auths = map[string]DockerConfigEntry{}
-
-	if resp, err := registryClient.List(); err == nil {
+	if resp, err := azureService.GetContainerRegistryList(opts.AzureSubscription); err == nil {
 		if resp.Value != nil {
 			for _, registry := range *(resp.Value) {
-				acrServer := *(registry.LoginServer)
+				acr := azureService.CreateContainerRegistryClient(*(registry.LoginServer))
 
-				fmt.Println(fmt.Sprintf("Request RefreshToken for %s", acrServer))
+				fmt.Println(fmt.Sprintf("Request RefreshToken for %s", acr.GetName()))
 
-				acrToken, err := fetchAcrToken(acrServer, opts.AzureTenant, servicePrincipalToken.AccessToken)
+				acrToken, err := acr.FetchAcrToken()
 				if err != nil {
 					ErrorMessage("failed to fetch acr refresh token", err)
 					continue
@@ -234,7 +210,7 @@ func updateDockerConfig() {
 				entry.Auth = base64.StdEncoding.EncodeToString([]byte("00000000-0000-0000-0000-000000000000:"))
 				entry.Identitytoken = acrToken
 
-				dockerConfig.Auths[acrServer] = entry
+				dockerConfig.Auths[acr.GetName()] = entry
 			}
 		}
 	} else {

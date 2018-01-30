@@ -7,8 +7,16 @@ import (
 	"net/http"
 	"io/ioutil"
 	"encoding/json"
-	jwt "github.com/dgrijalva/jwt-go"
+	"github.com/Azure/go-autorest/autorest/adal"
+	"github.com/dgrijalva/jwt-go"
 )
+
+type azureAcr struct {
+	loginServer string
+	azureTenantId string
+	servicePrincipalToken *adal.ServicePrincipalToken
+
+}
 
 type acrTokenPayload struct {
 	Expiration int64  `json:"exp"`
@@ -20,15 +28,19 @@ var (
 	client = http.Client{}
 )
 
-func fetchAcrToken(acrServer, azureTenant, accessToken string) (refreshToken string, err error) {
-	acrAuthEndpoint := fmt.Sprintf("https://%s/oauth2/exchange", acrServer)
+func (a *azureAcr) GetName() string {
+	return a.loginServer
+}
 
+
+func (a *azureAcr) FetchAcrToken() (refreshToken string, err error) {
+	acrAuthEndpoint := fmt.Sprintf("https://%s/oauth2/exchange", a.loginServer)
 
 	v := url.Values{}
 	v.Set("grant_type", "access_token")
-	v.Set("service", acrServer)
-	v.Set("tenant", azureTenant)
-	v.Set("access_token", accessToken)
+	v.Set("service", a.loginServer)
+	v.Set("tenant", a.azureTenantId)
+	v.Set("access_token", a.servicePrincipalToken.AccessToken)
 
 	s := v.Encode()
 	body := ioutil.NopCloser(strings.NewReader(s))
