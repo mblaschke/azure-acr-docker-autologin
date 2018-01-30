@@ -108,7 +108,7 @@ func main() {
 			updateDockerConfig()
 
 			if opts.autoRefreshNextTime <= time.Now().Unix() {
-				opts.autoRefreshNextTime = 10 * 60
+				opts.autoRefreshNextTime = time.Now().Unix() + 10 * 60
 			}
 
 			nextUpdateUnix := opts.autoRefreshNextTime - (opts.AutoRefreshAdvance * 60)
@@ -207,7 +207,7 @@ func updateDockerConfig() {
 			if opts.k8sEnabled {
 				fmt.Println(fmt.Sprintf("Updating k8s secret %s:%s", opts.K8sNamespace, opts.K8sSecret))
 				if err := k8sService.ApplySecret(opts.K8sNamespace, opts.K8sSecret, opts.K8sFilename, jsonData); err != nil {
-					ErrorLogger.Error("Unable to update k8 ssecret", err)
+					ErrorLogger.Error("Unable to update k8s secret", err)
 				}
 			}
 		} else {
