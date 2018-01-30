@@ -18,19 +18,19 @@ const (
 )
 
 var opts struct {
-	DockerConfigPath    string   `           long:"docker-config"                        env:"DOCKER_CONFIG_DESTINATION"`
-	DaemonMode          bool     `short:"d"  long:"daemon"                               env:"DAEMON_MODE"`
-	AzureTenant         string   `           long:"azure-tenant"                         env:"AZURE_TENANT"                       required:"true"`
-	AzureSubscription   []string `           long:"azure-subscription"                   env:"AZURE_SUBSCRIPTION"                 required:"true"`
-	AzureClient         string   `           long:"azure-client"                         env:"AZURE_CLIENT"                       required:"true"`
-	AzureClientSecret   string   `           long:"azure-client-secret"                  env:"AZURE_CLIENT_SECRET" env-delim:" "  required:"true"`
-	DockerSecretMode    string   `           long:"docker-secret-mode"     default:"refresh_token" choice:"refresh_token" choice:"secret" env:"DOCKER_SECRET_MODE"`
+	DockerConfigPath    string   `           long:"docker-config"         env:"DOCKER_CONFIG_DESTINATION"`
+	DaemonMode          bool     `short:"d"  long:"daemon"                env:"DAEMON_MODE"`
+	AzureTenant         string   `           long:"azure-tenant"          env:"AZURE_TENANT"                       required:"true"`
+	AzureSubscription   []string `           long:"azure-subscription"    env:"AZURE_SUBSCRIPTION"                 required:"true"`
+	AzureClient         string   `           long:"azure-client"          env:"AZURE_CLIENT"                       required:"true"`
+	AzureClientSecret   string   `           long:"azure-client-secret"   env:"AZURE_CLIENT_SECRET" env-delim:" "  required:"true"`
+	DockerSecretMode    string   `           long:"docker-secret-mode"    env:"DOCKER_SECRET_MODE"  default:"refresh_token" choice:"refresh_token" choice:"secret"`
 	k8sEnabled          bool
-	K8sNamespace        string   `           long:"k8s-secret-namespace"                 env:"KUBERNETES_SECRET_NAMESPACE"`
-	K8sSecret           string   `           long:"k8s-secret-name"                      env:"KUBERNETES_SECRET_NAME"`
-	K8sFilename         string   `           long:"k8s-secret-filename"                  env:"KUBERNETES_SECRET_FILENAME"`
-	AutoRefresh         string   `           long:"refresh"                              env:"AUTO_REFRESH"`
-	AutoRefreshAdvance  int64    `           long:"refresh-advance"        default:"10"  env:"AUTO_REFRESH_ADVANCE"`
+	K8sNamespace        string   `           long:"k8s-secret-namespace"  env:"KUBERNETES_SECRET_NAMESPACE"`
+	K8sSecret           string   `           long:"k8s-secret-name"       env:"KUBERNETES_SECRET_NAME"`
+	K8sFilename         string   `           long:"k8s-secret-filename"   env:"KUBERNETES_SECRET_FILENAME"`
+	AutoRefresh         string   `           long:"refresh"               env:"AUTO_REFRESH"`
+	AutoRefreshAdvance  int64    `           long:"refresh-advance"       env:"AUTO_REFRESH_ADVANCE"  default:"10"`
 	autoRefresh         time.Duration
 	autoRefreshNextTime int64
 }
