@@ -11,22 +11,19 @@ import (
 	flags "github.com/jessevdk/go-flags"
 )
 
-const (
-	AutomaticRefreshPrematureSeconds = 600
-)
-
 var opts struct {
-	DockerConfigPath    string   `           long:"docker-config"`
-	Daemon              bool     `short:"d"  long:"daemon"`
-	AzureTenant         string   `           long:"azure-tenant"`
-	AzureSubscription   string   `           long:"azure-subscription"`
-	AzureClient         string   `           long:"azure-client"`
-	azureClientSecret   string
+	DockerConfigPath    string   `           long:"docker-config"                        env:"DOCKER_CONFIG_DESTINATION"`
+	Daemon              bool     `short:"d"  long:"daemon"                               env:"DAEMON_MODE"`
+	AzureTenant         string   `           long:"azure-tenant"                         env:"AZURE_TENANT"`
+	AzureSubscription   string   `           long:"azure-subscription"                   env:"AZURE_SUBSCRIPTION"`
+	AzureClient         string   `           long:"azure-client"                         env:"AZURE_CLIENT"`
+	AzureClientSecret   string   `           long:"azure-client-secret"                  env:"AZURE_CLIENT_SECRET"`
 	k8sEnabled          bool
-	K8sNamespace        string   `           long:"k8s-secret-namespace"`
-	K8sSecret           string   `           long:"k8s-secret-name"`
-	K8sFilename         string   `           long:"k8s-secret-filename"`
-	AutoRefresh         string   `           long:"refresh"`
+	K8sNamespace        string   `           long:"k8s-secret-namespace"                 env:"KUBERNETES_SECRET_NAMESPACE"`
+	K8sSecret           string   `           long:"k8s-secret-name"                      env:"KUBERNETES_SECRET_NAME"`
+	K8sFilename         string   `           long:"k8s-secret-filename"                  env:"KUBERNETES_SECRET_FILENAME"`
+	AutoRefresh         string   `           long:"refresh"                              env:"AUTO_REFRESH"`
+	AutoRefreshAdvance  int64    `           long:"refresh-advance"        default:"10"  env:"AUTO_REFRESH_ADVANCE"`
 	autoRefresh         time.Duration
 	autoRefreshNextTime int64
 }
@@ -49,40 +46,6 @@ func initOpts() (err error) {
 		}
 	}
 
-	//#######################
-	// Azure
-	//#######################
-	if val := os.Getenv("AZURE_TENANT"); opts.AzureTenant == "" && val != "" {
-		opts.AzureTenant = val
-	}
-
-	if val := os.Getenv("AZURE_SUBSCRIPTION"); opts.AzureSubscription == "" && val != "" {
-		opts.AzureSubscription = val
-	}
-
-	if val := os.Getenv("AZURE_CLIENT"); opts.AzureClient == "" && val != "" {
-		opts.AzureClient = val
-	}
-
-	if val := os.Getenv("AZURE_CLIENT_SECRET"); opts.azureClientSecret == "" && val != "" {
-		opts.azureClientSecret = val
-	}
-
-	//#######################
-	// K8S
-	//#######################
-	if val := os.Getenv("KUBERNETES_SECRET_NAMESPACE"); opts.K8sNamespace == "" && val != "" {
-		opts.K8sNamespace = val
-	}
-
-	if val := os.Getenv("KUBERNETES_SECRET_NAME"); opts.K8sSecret == "" && val != "" {
-		opts.K8sSecret = val
-	}
-
-	if val := os.Getenv("KUBERNETES_SECRET_FILENAME"); opts.K8sFilename == "" && val != "" {
-		opts.K8sFilename = val
-	}
-
 	return
 }
 
@@ -103,7 +66,7 @@ func validateOpts() (err error) {
 		return errors.New("Azure client id empty (use either --azure-client or env var AZURE_CLIENT)")
 	}
 
-	if opts.azureClientSecret == "" {
+	if opts.AzureClientSecret == "" {
 		return errors.New("Azure client secret empty (use env var AZURE_CLIENT_SECRET)")
 	}
 
@@ -157,7 +120,7 @@ func main() {
 			opts.autoRefreshNextTime = 0
 			updateDockerConfig()
 
-			nextUpdateUnix := opts.autoRefreshNextTime - AutomaticRefreshPrematureSeconds
+			nextUpdateUnix := opts.autoRefreshNextTime - (opts.AutoRefreshAdvance * 60)
 			waitUntil := time.Unix(nextUpdateUnix, 0)
 			duration := time.Until(waitUntil)
 			fmt.Println(fmt.Sprintf("Sleeping for %.2f minutes (%v)", duration.Minutes(), waitUntil.String()))
@@ -173,7 +136,7 @@ func updateDockerConfig() {
 	azureService := AzureService{
 		TenantId: opts.AzureTenant,
 		ClientId: opts.AzureClient,
-		ClientSecret: opts.azureClientSecret,
+		ClientSecret: opts.AzureClientSecret,
 	}
 	_, err := azureService.CreateServicePrincipalToken()
 	if err != nil {
