@@ -12,6 +12,11 @@ import (
 	flags "github.com/jessevdk/go-flags"
 )
 
+const (
+	time10Minutes = 10 * 60
+	timeNeverExpire = 10 * 31536000
+)
+
 var opts struct {
 	DockerConfigPath    string   `           long:"docker-config"                        env:"DOCKER_CONFIG_DESTINATION"`
 	DaemonMode          bool     `short:"d"  long:"daemon"                               env:"DAEMON_MODE"`
@@ -19,6 +24,7 @@ var opts struct {
 	AzureSubscription   []string `           long:"azure-subscription"                   env:"AZURE_SUBSCRIPTION"                 required:"true"`
 	AzureClient         string   `           long:"azure-client"                         env:"AZURE_CLIENT"                       required:"true"`
 	AzureClientSecret   string   `           long:"azure-client-secret"                  env:"AZURE_CLIENT_SECRET" env-delim:" "  required:"true"`
+	DockerSecretMode    string   `           long:"docker-secret-mode"     default:"refresh_token" choice:"refresh_token" choice:"secret" env:"DOCKER_SECRET_MODE"`
 	k8sEnabled          bool
 	K8sNamespace        string   `           long:"k8s-secret-namespace"                 env:"KUBERNETES_SECRET_NAMESPACE"`
 	K8sSecret           string   `           long:"k8s-secret-name"                      env:"KUBERNETES_SECRET_NAME"`
@@ -108,7 +114,7 @@ func main() {
 			updateDockerConfig()
 
 			if opts.autoRefreshNextTime <= time.Now().Unix() {
-				opts.autoRefreshNextTime = time.Now().Unix() + 10 * 60
+				opts.autoRefreshNextTime = time.Now().Unix() + time10Minutes
 			}
 
 			nextUpdateUnix := opts.autoRefreshNextTime - (opts.AutoRefreshAdvance * 60)
@@ -151,24 +157,36 @@ func updateDockerConfig() {
 					go func(acr *azureAcr) {
 						defer wg.Done()
 
-						Logger.Println(fmt.Sprintf("Requesting RefreshToken for %s", acr.GetName()))
-
-						acrToken, err := acr.FetchAcrToken()
-						if err != nil {
-							ErrorLogger.Error("failed to fetch acr refresh token", err)
-							return
-						}
-
-						// calc valid time
-						acrParsedToken, _ := parseAcrToken(acrToken)
-						validUntil := acrParsedToken.Expiration
-
-						// build entry
 						entry := DockerConfigEntry{}
 						entry.Server = acr.GetName()
-						entry.Auth = base64.StdEncoding.EncodeToString([]byte("00000000-0000-0000-0000-000000000000:"))
-						entry.Identitytoken = acrToken
-						entry.ValidUntil = validUntil
+
+						switch opts.DockerSecretMode {
+						case "secret":
+							Logger.Println(fmt.Sprintf("Using ServicePrincipal secret for %s", acr.GetName()))
+
+							// build entry
+							auth := fmt.Sprintf("%s:%s", azureService.ClientId, azureService.ClientSecret)
+							entry.Auth = base64.StdEncoding.EncodeToString([]byte(auth))
+							entry.ValidUntil = time.Now().Unix() + timeNeverExpire
+
+						case "refresh_token":
+							Logger.Println(fmt.Sprintf("Requesting RefreshToken for %s", acr.GetName()))
+
+							acrToken, err := acr.FetchAcrToken()
+							if err != nil {
+								ErrorLogger.Error("failed to fetch acr refresh token", err)
+								return
+							}
+
+							// calc valid time
+							acrParsedToken, _ := parseAcrToken(acrToken)
+							validUntil := acrParsedToken.Expiration
+
+							// build entry
+							entry.Auth = base64.StdEncoding.EncodeToString([]byte("00000000-0000-0000-0000-000000000000:"))
+							entry.Identitytoken = acrToken
+							entry.ValidUntil = validUntil
+						}
 
 						channel <- entry
 						return

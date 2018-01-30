@@ -2,8 +2,8 @@ package main
 
 type DockerConfigEntry struct {
 	Server string        `json:"-"`
-	Auth string          `json:"auth"`
-	Identitytoken string `json:"identitytoken"`
+	Auth string          `json:"auth,omitempty"`
+	Identitytoken string `json:"identitytoken,omitempty"`
 	ValidUntil int64     `json:"-"`
 
 }
