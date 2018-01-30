@@ -6,6 +6,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/api/core/v1"
+	v12 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 type Kubernetes struct {
@@ -43,7 +44,20 @@ func (k *Kubernetes) Client() (clientset *kubernetes.Clientset) {
 
 
 func (k *Kubernetes) ApplySecret(namespace, secretName, filename string, content []byte) error {
-	secret := v1.Secret{}
+
+	var secret v1.Secret
+	secretExists := false
+
+	option := v12.GetOptions{}
+	if val, err := k.Client().CoreV1().Secrets(namespace).Get(secretName, option); err != nil {
+		if val != nil {
+			secret = val
+			secretExists = true
+		}
+	} else {
+		return err
+	}
+
 	secret.APIVersion = "v1"
 	secret.Namespace = namespace
 	secret.Name = secretName
@@ -51,6 +65,13 @@ func (k *Kubernetes) ApplySecret(namespace, secretName, filename string, content
 	secret.Data = map[string][]byte{}
 	secret.Data[filename] = content
 
-	_, error := k.Client().CoreV1().Secrets(namespace).Update(&secret)
-	return error
+
+	var err error
+	if secretExists {
+		_, err = k.Client().CoreV1().Secrets(namespace).Update(&secret)
+	} else {
+		_, err = k.Client().CoreV1().Secrets(namespace).Create(&secret)
+	}
+
+	return err
 }
