@@ -4,6 +4,7 @@ import (
 	"os"
 	"fmt"
 	"time"
+	"sync"
 	"errors"
 	"io/ioutil"
 	"encoding/json"
@@ -13,11 +14,11 @@ import (
 
 var opts struct {
 	DockerConfigPath    string   `           long:"docker-config"                        env:"DOCKER_CONFIG_DESTINATION"`
-	Daemon              bool     `short:"d"  long:"daemon"                               env:"DAEMON_MODE"`
-	AzureTenant         string   `           long:"azure-tenant"                         env:"AZURE_TENANT"`
-	AzureSubscription   string   `           long:"azure-subscription"                   env:"AZURE_SUBSCRIPTION"`
-	AzureClient         string   `           long:"azure-client"                         env:"AZURE_CLIENT"`
-	AzureClientSecret   string   `           long:"azure-client-secret"                  env:"AZURE_CLIENT_SECRET"`
+	DaemonMode          bool     `short:"d"  long:"daemon"                               env:"DAEMON_MODE"`
+	AzureTenant         string   `           long:"azure-tenant"                         env:"AZURE_TENANT"                       required:"true"`
+	AzureSubscription   []string `           long:"azure-subscription"                   env:"AZURE_SUBSCRIPTION"                 required:"true"`
+	AzureClient         string   `           long:"azure-client"                         env:"AZURE_CLIENT"                       required:"true"`
+	AzureClientSecret   string   `           long:"azure-client-secret"                  env:"AZURE_CLIENT_SECRET" env-delim:" "  required:"true"`
 	k8sEnabled          bool
 	K8sNamespace        string   `           long:"k8s-secret-namespace"                 env:"KUBERNETES_SECRET_NAMESPACE"`
 	K8sSecret           string   `           long:"k8s-secret-name"                      env:"KUBERNETES_SECRET_NAME"`
@@ -32,6 +33,8 @@ var (
 	argparser *flags.Parser
 	args []string
 	k8sService = Kubernetes{}
+	Logger *DaemonLogger
+	ErrorLogger *DaemonLogger
 )
 
 func initOpts() (err error) {
@@ -50,26 +53,6 @@ func initOpts() (err error) {
 }
 
 func validateOpts() (err error) {
-
-	//#######################
-	// Azure
-	//#######################
-	if opts.AzureTenant == "" {
-		return errors.New("Azure tenant id empty (use either --azure-tenant or env var AZURE_TENANT)")
-	}
-
-	if opts.AzureSubscription == "" {
-		return errors.New("Azure subscription id empty (use either --azure-subscription or env var AZURE_SUBSCRIPTION)")
-	}
-
-	if opts.AzureClient == "" {
-		return errors.New("Azure client id empty (use either --azure-client or env var AZURE_CLIENT)")
-	}
-
-	if opts.AzureClientSecret == "" {
-		return errors.New("Azure client secret empty (use env var AZURE_CLIENT_SECRET)")
-	}
-
 	//#######################
 	// K8S
 	//#######################
@@ -96,6 +79,10 @@ func main() {
 	argparser = flags.NewParser(&opts, flags.Default)
 	args, err = argparser.Parse()
 
+	// Init logger
+	Logger = CreateDaemonLogger(0)
+	ErrorLogger = CreateDaemonErrorLogger(0)
+
 	// check if there is an parse error
 	if err != nil {
 		if flagsErr, ok := err.(*flags.Error); ok && flagsErr.Type == flags.ErrHelp {
@@ -115,15 +102,19 @@ func main() {
 		FatalErrorMessage("unable to validate config", err)
 	}
 
-	if opts.Daemon {
+	if opts.DaemonMode {
 		for {
 			opts.autoRefreshNextTime = 0
 			updateDockerConfig()
 
+			if opts.autoRefreshNextTime <= time.Now().Unix() {
+				opts.autoRefreshNextTime = 10 * 60
+			}
+
 			nextUpdateUnix := opts.autoRefreshNextTime - (opts.AutoRefreshAdvance * 60)
 			waitUntil := time.Unix(nextUpdateUnix, 0)
 			duration := time.Until(waitUntil)
-			fmt.Println(fmt.Sprintf("Sleeping for %.2f minutes (%v)", duration.Minutes(), waitUntil.String()))
+			Logger.Println(fmt.Sprintf("Sleeping for %.2f minutes (%v)", duration.Minutes(), waitUntil.String()))
 			time.Sleep(duration)
 		}
 	} else {
@@ -132,80 +123,111 @@ func main() {
 }
 
 func updateDockerConfig() {
+	var wg sync.WaitGroup
+	var wgMain sync.WaitGroup
+
 	// create azure service principal adal token
 	azureService := AzureService{
 		TenantId: opts.AzureTenant,
 		ClientId: opts.AzureClient,
 		ClientSecret: opts.AzureClientSecret,
 	}
+
+	Logger.Println(fmt.Sprintf("Request ServicePrincipal token"))
 	_, err := azureService.CreateServicePrincipalToken()
 	if err != nil {
 		FatalErrorMessage("failed to create service principal token", err)
 	}
 
-	// init docker configuration
-	dockerConfig := CreateDockerConfig()
+	channel := make(chan DockerConfigEntry)
 
-	if resp, err := azureService.GetContainerRegistryList(opts.AzureSubscription); err == nil {
-		if resp.Value != nil {
-			for _, registry := range *(resp.Value) {
-				acr := azureService.CreateContainerRegistryClient(*(registry.LoginServer))
+	for _, azureSubscription := range opts.AzureSubscription {
+		if resp, err := azureService.GetContainerRegistryList(azureSubscription); err == nil {
+			if resp.Value != nil {
+				for _, registry := range *(resp.Value) {
+					acr := azureService.CreateContainerRegistryClient(*(registry.LoginServer))
+					wg.Add(1)
 
-				fmt.Println(fmt.Sprintf("Request RefreshToken for %s", acr.GetName()))
+					go func(acr *azureAcr) {
+						defer wg.Done()
 
-				acrToken, err := acr.FetchAcrToken()
-				if err != nil {
-					ErrorMessage("failed to fetch acr refresh token", err)
-					continue
+						Logger.Println(fmt.Sprintf("Requesting RefreshToken for %s", acr.GetName()))
+
+						acrToken, err := acr.FetchAcrToken()
+						if err != nil {
+							ErrorLogger.Error("failed to fetch acr refresh token", err)
+							return
+						}
+
+						// calc valid time
+						acrParsedToken, _ := parseAcrToken(acrToken)
+						validUntil := acrParsedToken.Expiration
+
+						// build entry
+						entry := DockerConfigEntry{}
+						entry.Server = acr.GetName()
+						entry.Auth = base64.StdEncoding.EncodeToString([]byte("00000000-0000-0000-0000-000000000000:"))
+						entry.Identitytoken = acrToken
+						entry.ValidUntil = validUntil
+
+						channel <- entry
+						return
+					}(acr)
 				}
-
-				// auto calc autorefresh
-				if opts.AutoRefresh == "" {
-					acrParsedToken, _ := parseAcrToken(acrToken)
-					nextUpdateTime := acrParsedToken.Expiration
-					if opts.autoRefreshNextTime == 0 || nextUpdateTime <= opts.autoRefreshNextTime {
-						opts.autoRefreshNextTime = nextUpdateTime
-					}
-				}
-
-				// Add to docker
-				entry := DockerConfigEntry{}
-				entry.Auth = base64.StdEncoding.EncodeToString([]byte("00000000-0000-0000-0000-000000000000:"))
-				entry.Identitytoken = acrToken
-
-				dockerConfig.Auths[acr.GetName()] = entry
 			}
+		} else {
+			FatalErrorMessage("failed to get acr list", err)
 		}
-	} else {
-		panic(fmt.Sprintf("[ERROR] failed to get acr list: %v", err))
 	}
 
-	// Update docker config
-	if jsonData, err := json.MarshalIndent(dockerConfig, "", "  "); err == nil {
-		// update local file
-		if opts.DockerConfigPath != "" {
-			fmt.Println(fmt.Sprintf("Updating docker config %s", opts.DockerConfigPath))
-			if err := ioutil.WriteFile(opts.DockerConfigPath, jsonData, 0600); err != nil {
-				ErrorMessage("Unable to write docker file", err)
-			}
+	wgMain.Add(1)
+	go func() {
+		defer wgMain.Done()
+
+		// init docker configuration
+		dockerConfig := CreateDockerConfig()
+
+		for item := range channel {
+			serverName := item.Server
+			dockerConfig.Auths[serverName] = item
 		}
 
-		// Update k8s secret
-		if opts.k8sEnabled {
-			fmt.Println(fmt.Sprintf("Updating k8s secret %s:%s", opts.K8sNamespace, opts.K8sSecret))
-			if err := k8sService.ApplySecret(opts.K8sNamespace, opts.K8sSecret, opts.K8sFilename, jsonData); err != nil {
-				ErrorMessage("Unable to update k8 ssecret", err)
+		// Update docker config
+		Logger.Println("Building configuration")
+		if jsonData, err := json.MarshalIndent(dockerConfig, "", "  "); err == nil {
+			// update local file
+			if opts.DockerConfigPath != "" {
+				fmt.Println(fmt.Sprintf("Updating docker config %s", opts.DockerConfigPath))
+				if err := ioutil.WriteFile(opts.DockerConfigPath, jsonData, 0600); err != nil {
+					ErrorLogger.Error("Unable to write docker file", err)
+				}
+			}
+
+			// Update k8s secret
+			if opts.k8sEnabled {
+				fmt.Println(fmt.Sprintf("Updating k8s secret %s:%s", opts.K8sNamespace, opts.K8sSecret))
+				if err := k8sService.ApplySecret(opts.K8sNamespace, opts.K8sSecret, opts.K8sFilename, jsonData); err != nil {
+					ErrorLogger.Error("Unable to update k8 ssecret", err)
+				}
+			}
+		} else {
+			FatalErrorMessage("failed to create docker config", err)
+		}
+
+		// Calc auto refresh next time
+		opts.autoRefreshNextTime = 0
+		for _, entry := range dockerConfig.Auths {
+			if opts.autoRefreshNextTime == 0 || entry.ValidUntil < opts.autoRefreshNextTime {
+				opts.autoRefreshNextTime = entry.ValidUntil
 			}
 		}
-	} else {
-		FatalErrorMessage("failed to create docker config", err)
-	}
+	}()
+
+	wg.Wait()
+	close(channel)
+	wgMain.Wait()
 }
 
 func FatalErrorMessage(msg string, err error) {
 	panic(fmt.Sprintf("[FATAL] %v: %v\n", msg, err))
-}
-
-func ErrorMessage(msg string, err error) {
-	fmt.Errorf("[ERROR] %v: %v\n", msg, err)
 }

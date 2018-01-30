@@ -1,8 +1,11 @@
 package main
 
 type DockerConfigEntry struct {
+	Server string        `json:"-"`
 	Auth string          `json:"auth"`
 	Identitytoken string `json:"identitytoken"`
+	ValidUntil int64     `json:"-"`
+
 }
 
 type DockerConfig struct {
